@@ -1,0 +1,15 @@
+{
+  "gpu": "NVIDIA A100 80GB PCIe",
+  "workload": "model-bundled Hindi prompt audio plus 8 fixed varied-length Hindi targets; CLS; NFE=32",
+  "warmup_requests_excluded_per_run": 1,
+  "rtf_definition": "timed run wall seconds divided by generated audio seconds",
+  "latency_definition": "per-request end-to-end latency; includes queueing at C=2",
+  "rows": [
+    {"mode": "HF eager, FP32", "concurrency": 1, "system_e2e_rtf": 0.8940, "throughput_requests_per_second": 0.239, "mean_latency_ms": 4187.846, "p95_latency_ms": 5367.605, "audio_seconds_total": 37.504, "quality": "Pass: 8/8"},
+    {"mode": "HF eager, FP32", "concurrency": 2, "system_e2e_rtf": 0.8923, "throughput_requests_per_second": 0.239, "mean_latency_ms": 7643.712, "p95_latency_ms": 9912.517, "audio_seconds_total": 37.504, "quality": "Pass: 8/8"},
+    {"mode": "TRT-LLM FP32 DiT + TRT Vocos + Triton", "concurrency": 1, "system_e2e_rtf": 0.7552, "throughput_requests_per_second": 0.266, "mean_latency_ms": 3722.090, "p95_latency_ms": 5318.994, "audio_seconds_total": 39.8826666667, "quality": "Pass: 8/8"},
+    {"mode": "TRT-LLM FP32 DiT + TRT Vocos + Triton", "concurrency": 2, "system_e2e_rtf": 0.7247, "throughput_requests_per_second": 0.277, "mean_latency_ms": 6452.628, "p95_latency_ms": 9152.499, "audio_seconds_total": 39.8826666667, "quality": "Pass: 8/8"},
+    {"mode": "AOTI BF16 autocast DiT + server", "concurrency": 1, "system_e2e_rtf": 0.2547, "throughput_requests_per_second": 0.837, "mean_latency_ms": 1189.419, "p95_latency_ms": 1522.652, "audio_seconds_total": 37.504, "quality": "Pass: 8/8"},
+    {"mode": "AOTI BF16 autocast DiT + server", "concurrency": 2, "system_e2e_rtf": 0.2512, "throughput_requests_per_second": 0.849, "mean_latency_ms": 2151.071, "p95_latency_ms": 2767.483, "audio_seconds_total": 37.504, "quality": "Pass: 8/8"}
+  ]
+}
