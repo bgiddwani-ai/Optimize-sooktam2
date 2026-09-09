@@ -165,7 +165,6 @@ cat "$ROOT/artifacts/bench_hindi8_nfe32/FINAL.md"
 
 ## Important scope notes
 
-- This workload replaced FLEURS completely; it is eight fixed Hindi targets to make runs repeatable.
 - Compare RTF only within the stated end-to-end boundary. Triton did not expose an internal DiT/Vocos duration tensor in its public model schema.
 - The generated audio duration differed slightly across the BLS and Python paths, so RTF is normalized by each row's actual output duration.
 - AOTI and native eager have a serialized model boundary. Real server-side microbatching would need independent-reference batching, duration bucketing, and deterministic per-request RNG handling.
