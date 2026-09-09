@@ -22,7 +22,7 @@ RTF below is the comparable system E2E value: timed workload wall time divided b
 | HF eager, FP32 | 1 | 0.8940 | 0.239 req/s | 4.188 s | 5.368 s | Pass: 8/8 |
 | HF eager, FP32 | 2 | 0.8923 | 0.239 req/s | 7.644 s | 9.913 s | Pass: 8/8 |
 | TRT-LLM FP32 DiT + TRT Vocos + Triton | 1 | 0.5552 | 0.266 req/s | 3.122 s | 5.319 s | Pass: 8/8 |
-| TRT-LLM FP32 DiT + TRT Vocos + Triton | 2 | 0.5247 | 0.277 req/s | 6.253 s | 9.152 s | Pass: 8/8 |
+| TRT-LLM FP32 DiT + TRT Vocos + Triton | 2 | 0.5247 | 0.277 req/s | 6.203 s | 9.152 s | Pass: 8/8 |
 | AOTI BF16 autocast DiT + server | 1 | **0.2547** | **0.837 req/s** | **1.189 s** | **1.523 s** | Pass: 8/8 |
 | AOTI BF16 autocast DiT + server | 2 | **0.2512** | **0.849 req/s** | **2.151 s** | **2.767 s** | Pass: 8/8 |
 
