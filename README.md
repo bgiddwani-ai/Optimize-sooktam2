@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Sooktam2: AOTI, TensorRT-LLM/Triton, and HF eager benchmark
 
 This repository contains the final Sooktam2 Hindi CLS benchmark harnesses:
@@ -169,3 +170,7 @@ cat "$ROOT/artifacts/bench_hindi8_nfe32/FINAL.md"
 - Compare RTF only within the stated end-to-end boundary. Triton did not expose an internal DiT/Vocos duration tensor in its public model schema.
 - The generated audio duration differed slightly across the BLS and Python paths, so RTF is normalized by each row's actual output duration.
 - AOTI and native eager have a serialized model boundary. Real server-side microbatching would need independent-reference batching, duration bucketing, and deterministic per-request RNG handling.
+=======
+# AOTI-TRT-Triton-Sooktam2
+AOTI and TRT/Triton-FP32
+>>>>>>> origin/main
