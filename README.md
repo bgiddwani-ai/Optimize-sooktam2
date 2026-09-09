@@ -33,7 +33,7 @@ The source data for the table is saved in [`results/final_summary.json`](results
 aoti_bf16_server.py             BF16-autocast AOTInductor FastAPI service
 aoti_preflight.py               Dynamic-shape AOTI capability check
 start_aoti_bf16_server.sh       Starts the service in a remote screen session
-hindi8_workload.py              Shared non-FLEURS Hindi prompt/text workload
+hindi8_workload.py              Shared Hindi prompt/text workload
 http_benchmark_client.py        Quality-gated Triton or AOTI HTTP benchmark client
 native_hf_eager_benchmark.py    Quality-gated native eager FP32 benchmark
 summarize_final.py              Produces FINAL.md and final_summary.json
