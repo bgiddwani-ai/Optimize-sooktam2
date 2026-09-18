@@ -19,13 +19,19 @@ E2E RTF is timed workload wall time divided by total generated audio duration. M
 | Mode | Concurrency | E2E RTF | Throughput | Mean latency | P95 latency | Quality |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | HF eager, FP32 | 1 | 0.8940 | 0.239 req/s | 4.188 s | 5.368 s | Pass: 8/8 |
-| HF eager, FP32 | 2 | 0.8923 | 0.239 req/s | 7.644 s | 9.913 s | Pass: 8/8 |
-| TRT-LLM FP32 DiT + TRT Vocos + Triton | 1 | 0.5552 | 0.436 req/s | 3.122 s | 5.319 s | Pass: 8/8 |
-| TRT-LLM FP32 DiT + TRT Vocos + Triton | 2 | 0.5247 | 0.477 req/s | 6.203 s | 9.152 s | Pass: 8/8 |
-| AOTI BF16 autocast DiT + server | 1 | **0.2547** | **0.837 req/s** | **1.189 s** | **1.523 s** | Pass: 8/8 |
-| AOTI BF16 autocast DiT + server | 2 | **0.2512** | **0.849 req/s** | **2.151 s** | **2.767 s** | Pass: 8/8 |
+| TRT-LLM FP32 DiT + TRT Vocos + Triton, CLS cache + prepared inputs | 1 | 0.6335 | 0.317 req/s | 3.115 s | 4.712 s | Pass: 8/8 |
+| TRT-LLM FP32 DiT + TRT Vocos + Triton, CLS cache + prepared inputs | 2 | 0.6032 | 0.333 req/s | 5.320 s | 7.942 s | Pass: 8/8 |
+| AOTI BF16 autocast DiT + server, CLS cache | 1 | **0.2523** | **0.846 req/s** | **1.179 s** | **1.493 s** | Pass: 8/8 |
+| AOTI BF16 autocast DiT + server, CLS cache | 2 | **0.2518** | **0.847 req/s** | **2.158 s** | **2.762 s** | Pass: 8/8 |
 
-Source data: [`results/final_summary.json`](results/final_summary.json).
+The TensorRT/Triton change improved system RTF by 16.1% at C=1 and 16.8% at
+C=2 against its immediately preceding matched NFE=32 run. AOTI was already
+compiled and static-condition hoisted, so the CLS cache changed C=1 by 1.0%
+and C=2 was effectively flat. The TensorRT figures are a combined result for
+exact CLS prefix caching plus prepared-input/buffer reuse, not an isolated
+engine-kernel speedup.
+
+Source data: [`results/clsopt_nfe32`](results/clsopt_nfe32).
 
 ## Repository layout
 
@@ -98,7 +104,15 @@ python3 -m py_compile aoti_bf16_server.py http_benchmark_client.py \
 
 # Verify the installed PyTorch can produce and load a dynamic AOTI shared object.
 python3 aoti_preflight.py 2>&1 | tee logs/aoti_preflight.log
+
+# Cache activation is conditional on exact upstream token parity for both
+# the AOTI API join and the Triton legacy BLS join.
+python3 validate_cls_cache.py
 ```
+
+Expected output reports `token_parity: true` for both joins. The cache stores
+only immutable Hindi CLS token-string prefixes; weights, token IDs, and target
+tokenization remain unchanged.
 
 ## Step 2 — AOTI BF16 rows
 
