@@ -1,0 +1,37 @@
+{
+  "dataset": "fixed_hindi8_non_fleurs",
+  "target_count": 8,
+  "target_characters": [
+    7,
+    30,
+    51,
+    65,
+    49,
+    73,
+    92,
+    134
+  ],
+  "reference_audio": "/workspace/src/sooktam2/ref.wav",
+  "tokenizer": "cls",
+  "cls_language": "hindi",
+  "nfe_steps": 32,
+  "backend": "aoti",
+  "endpoint": "http://127.0.0.1:8010",
+  "concurrency": 1,
+  "warmup_requests_excluded": 1,
+  "wall_seconds": 9.552916829999958,
+  "throughput_requests_per_second": 0.8374405579327162,
+  "mean_latency_ms": 1189.419021374988,
+  "p50_latency_ms": 1131.3617265004723,
+  "p90_latency_ms": 1460.3365551003662,
+  "p95_latency_ms": 1522.652493050009,
+  "processing_rtf": 0.2524962137372014,
+  "end_to_end_rtf": 0.25371566155609815,
+  "timing_scope": "aoti_server_and_e2e",
+  "audio_seconds_total": 37.504,
+  "quality": {
+    "passed": 8,
+    "total": 8,
+    "rms_floor": 0.001
+  }
+}

@@ -21,6 +21,7 @@ import os
 import shutil
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -38,6 +39,10 @@ from transformers import AutoModel
 
 from f5_tts.model.backbones.dit import DiT
 from f5_tts.model.cfm import CFM
+from f5_tts.infer.cls_token_cache import (
+    CLSReferencePrefixCache,
+    assert_reference_prefix_token_parity,
+)
 from f5_tts.model.utils import (
     exists,
     get_epss_timesteps,
@@ -186,6 +191,88 @@ class AOTIDiTStep:
         return output
 
 
+@dataclass(frozen=True)
+class PreparedAOTICondition:
+    """Static DiT inputs built once before the ODE loop.
+
+    This is deliberately the same split as the TensorRT-LLM adapter: token
+    embedding, CFG conditioning, RoPE, and the integration schedule are not
+    recomputed on every denoising step.
+    """
+
+    step_cond: torch.Tensor
+    text_embed_cond: torch.Tensor
+    text_embed_uncond: torch.Tensor
+    rope_freqs: torch.Tensor
+    timesteps: torch.Tensor
+    max_duration: int
+
+
+def _prepare_aoti_condition(
+    self: CFM,
+    cond: torch.Tensor,
+    text: torch.Tensor | list[str] | list[list[str]],
+    duration: int | torch.Tensor,
+    *,
+    lens: torch.Tensor | None,
+    steps: int,
+    sway_sampling_coef: float | None,
+    max_duration: int,
+    use_epss: bool,
+    no_ref_audio: bool,
+) -> PreparedAOTICondition:
+    """Prepare immutable CFM/DiT inputs before iterative sampling."""
+
+    if cond.ndim == 2:
+        cond = self.mel_spec(cond).permute(0, 2, 1)
+        assert cond.shape[-1] == self.num_channels
+    cond = cond.to(next(self.parameters()).dtype)
+    batch, cond_sequence_length, device = *cond.shape[:2], cond.device
+    if batch != 1:
+        raise ValueError("The AOTI service deliberately serializes model calls; batch must be one")
+    if lens is None:
+        lens = torch.full((batch,), cond_sequence_length, device=device, dtype=torch.long)
+    if isinstance(text, list):
+        if self.vocab_char_map is not None:
+            text = list_str_to_idx(text, self.vocab_char_map).to(device)
+        else:
+            text = list_str_to_tensor(text).to(device)
+    if isinstance(duration, int):
+        duration = torch.full((batch,), duration, device=device, dtype=torch.long)
+    duration = torch.maximum(torch.maximum((text != -1).sum(dim=-1), lens) + 1, duration)
+    duration = duration.clamp(max=max_duration)
+    prepared_duration = int(duration.amax().item())
+
+    padded_cond = F.pad(cond, (0, 0, 0, prepared_duration - cond_sequence_length), value=0.0)
+    if no_ref_audio:
+        padded_cond = torch.zeros_like(padded_cond)
+    cond_mask = lens_to_mask(lens)
+    cond_mask = F.pad(cond_mask, (0, prepared_duration - cond_mask.shape[-1]), value=False).unsqueeze(-1)
+    step_cond = torch.where(cond_mask, padded_cond, torch.zeros_like(padded_cond))
+
+    text_embed_cond = self.transformer.text_embed(text, prepared_duration, drop_text=False, audio_mask=None)
+    text_embed_uncond = self.transformer.text_embed(text, prepared_duration, drop_text=True, audio_mask=None)
+    rope_freqs, rope_scale = self.transformer.rotary_embed.forward_from_seq_len(prepared_duration)
+    if rope_scale != 1.0:
+        raise RuntimeError(f"unsupported non-constant RoPE scale: {rope_scale!r}")
+    if use_epss:
+        timesteps = get_epss_timesteps(steps, device=device, dtype=step_cond.dtype)
+    else:
+        timesteps = torch.linspace(0, 1, steps + 1, device=device, dtype=step_cond.dtype)
+    if sway_sampling_coef is not None:
+        timesteps = timesteps + sway_sampling_coef * (
+            torch.cos(torch.pi / 2 * timesteps) - 1 + timesteps
+        )
+    return PreparedAOTICondition(
+        step_cond=step_cond,
+        text_embed_cond=text_embed_cond,
+        text_embed_uncond=text_embed_uncond,
+        rope_freqs=rope_freqs,
+        timesteps=timesteps,
+        max_duration=prepared_duration,
+    )
+
+
 @torch.no_grad()
 def _sample_aoti(
     self: CFM,
@@ -210,66 +297,44 @@ def _sample_aoti(
 
     del duplicate_test, t_inter, edit_mask
     self.eval()
-    if cond.ndim == 2:
-        cond = self.mel_spec(cond).permute(0, 2, 1)
-        assert cond.shape[-1] == self.num_channels
-    cond = cond.to(next(self.parameters()).dtype)
-    batch, cond_sequence_length, device = *cond.shape[:2], cond.device
-    if batch != 1:
-        raise ValueError("The AOTI service deliberately serializes model calls; batch must be one")
-    if lens is None:
-        lens = torch.full((batch,), cond_sequence_length, device=device, dtype=torch.long)
-    if isinstance(text, list):
-        if self.vocab_char_map is not None:
-            text = list_str_to_idx(text, self.vocab_char_map).to(device)
-        else:
-            text = list_str_to_tensor(text).to(device)
-    if isinstance(duration, int):
-        duration = torch.full((batch,), duration, device=device, dtype=torch.long)
-    duration = torch.maximum(torch.maximum((text != -1).sum(dim=-1), lens) + 1, duration)
-    duration = duration.clamp(max=max_duration)
-    max_duration = int(duration.amax().item())
-
-    cond = F.pad(cond, (0, 0, 0, max_duration - cond_sequence_length), value=0.0)
-    if no_ref_audio:
-        cond = torch.zeros_like(cond)
-    cond_mask = lens_to_mask(lens)
-    cond_mask = F.pad(cond_mask, (0, max_duration - cond_mask.shape[-1]), value=False).unsqueeze(-1)
-    step_cond = torch.where(cond_mask, cond, torch.zeros_like(cond))
-
-    text_embed_cond = self.transformer.text_embed(text, max_duration, drop_text=False, audio_mask=None)
-    text_embed_uncond = self.transformer.text_embed(text, max_duration, drop_text=True, audio_mask=None)
-    rope_freqs, rope_scale = self.transformer.rotary_embed.forward_from_seq_len(max_duration)
-    if rope_scale != 1.0:
-        raise RuntimeError(f"unsupported non-constant RoPE scale: {rope_scale!r}")
+    prepared = _prepare_aoti_condition(
+        self,
+        cond,
+        text,
+        duration,
+        lens=lens,
+        steps=steps,
+        sway_sampling_coef=sway_sampling_coef,
+        max_duration=max_duration,
+        use_epss=use_epss,
+        no_ref_audio=no_ref_audio,
+    )
+    batch, device = prepared.step_cond.shape[0], prepared.step_cond.device
 
     if seed is not None:
         torch.manual_seed(seed)
-    y0 = torch.randn((batch, max_duration, self.num_channels), device=device, dtype=step_cond.dtype)
+    y0 = torch.randn(
+        (batch, prepared.max_duration, self.num_channels),
+        device=device,
+        dtype=prepared.step_cond.dtype,
+    )
     aoti_step = getattr(self.transformer, "_sooktam_aoti_step", None)
     if aoti_step is None:
         raise RuntimeError("AOTI DiT step is not installed")
 
-    if use_epss:
-        timesteps = get_epss_timesteps(steps, device=device, dtype=step_cond.dtype)
-    else:
-        timesteps = torch.linspace(0, 1, steps + 1, device=device, dtype=step_cond.dtype)
-    if sway_sampling_coef is not None:
-        timesteps = timesteps + sway_sampling_coef * (torch.cos(torch.pi / 2 * timesteps) - 1 + timesteps)
-
     def ode_function(timestep: torch.Tensor, noisy: torch.Tensor) -> torch.Tensor:
         prediction_cfg = aoti_step(
             noisy,
-            step_cond,
-            text_embed_cond,
-            text_embed_uncond,
+            prepared.step_cond,
+            prepared.text_embed_cond,
+            prepared.text_embed_uncond,
             timestep,
-            rope_freqs,
+            prepared.rope_freqs,
         )
         prediction, null_prediction = torch.chunk(prediction_cfg, 2, dim=0)
         return prediction + (prediction - null_prediction) * cfg_strength
 
-    trajectory = odeint(ode_function, y0, timesteps, **self.odeint_kwargs)
+    trajectory = odeint(ode_function, y0, prepared.timesteps, **self.odeint_kwargs)
     # Match upstream CFM.sample: use the full generated trajectory rather than
     # splicing the prompt mel back into the output.
     sampled = trajectory[-1]
@@ -287,6 +352,20 @@ def _request_seed(reference_text: str, target_text: str, supplied_seed: int | No
     return int.from_bytes(digest, "little") & ((1 << 63) - 1)
 
 
+def _aoti_cls_prefix(reference_text: str) -> str:
+    """Reproduce the upstream API + infer_batch_process text join exactly."""
+
+    # ``preprocess_ref_audio_text`` guarantees sentence punctuation, then
+    # ``infer_batch_process`` appends one byte-length terminal separator.  Do
+    # this before priming the cache so its key equals the callback's text.
+    prefix = reference_text
+    if not prefix.endswith(". ") and not prefix.endswith("。"):
+        prefix = prefix + (" " if prefix.endswith(".") else ". ")
+    if len(prefix[-1].encode("utf-8")) == 1:
+        prefix += " "
+    return prefix
+
+
 class SooktamAOTIService:
     def __init__(self, model_dir: Path, artifact_dir: Path, nfe_steps: int, max_sequence: int) -> None:
         self.model_dir = model_dir
@@ -294,6 +373,7 @@ class SooktamAOTIService:
         self.nfe_steps = nfe_steps
         self.max_sequence = max_sequence
         self.lock = asyncio.Lock()
+        self.cls_cache = CLSReferencePrefixCache()
         self.model = None
         self.tts = None
         self.compile_seconds: float | None = None
@@ -309,6 +389,15 @@ class SooktamAOTIService:
         accelerator = AOTIDiTStep(self.tts.ema_model.transformer, self.artifact_dir, self.max_sequence)
         accelerator.build_or_load()
         self.tts.ema_model.transformer._sooktam_aoti_step = accelerator
+        # Validate the exact reference-prefix construction once at startup on
+        # the fixed benchmark workload.  Serving falls back to upstream CLS
+        # whenever a request has a different prefix.
+        from hindi8_workload import HINDI_TARGETS, REFERENCE_TEXT
+
+        benchmark_prefix = _aoti_cls_prefix(REFERENCE_TEXT)
+        assert_reference_prefix_token_parity(
+            self.cls_cache, benchmark_prefix, HINDI_TARGETS, "hindi"
+        )
         self.compile_seconds = time.perf_counter() - started
 
     def infer_sync(self, reference_audio: bytes, reference_text: str, target_text: str, seed: int | None) -> tuple[bytes, float, int]:
@@ -319,6 +408,7 @@ class SooktamAOTIService:
             reference_path = temporary.name
         try:
             started = time.perf_counter()
+            self.cls_cache.prime_reference(_aoti_cls_prefix(reference_text), "hindi")
             with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 waveform, sample_rate, _ = self.tts.infer(
                     ref_file=reference_path,
@@ -330,6 +420,7 @@ class SooktamAOTIService:
                     speed=1.0,
                     cfg_strength=2.0,
                     seed=_request_seed(reference_text, target_text, seed),
+                    cls_tokenizer_fn=self.cls_cache.tokenize,
                     remove_silence=False,
                     show_info=lambda *_args, **_kwargs: None,
                     progress=None,
@@ -358,6 +449,7 @@ def create_app(service: SooktamAOTIService) -> FastAPI:
                 "max_sequence": service.max_sequence,
                 "compile_seconds": service.compile_seconds,
                 "model_boundary": "serialized",
+                "cls_prefix_cache": vars(service.cls_cache.stats()),
             }
         )
 
